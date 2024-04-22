@@ -26,6 +26,7 @@
     
   # SI specific paths/functions  
     load_secrets()
+    
     mozART <- file.path("Data/MozART 2.0/")
     df_list <- list.files(mozART)
   
@@ -34,11 +35,23 @@
     
 # LOAD DATA ============================================================================  
 
-  db <- map(setNames(df_list, df_list %>% str_remove_all(., ".gz")), ~readRDS(file.path(mozART, .x)))
+  db <- map(setNames(df_list, df_list %>% str_remove_all(., ".gz")), 
+            ~readRDS(file.path(mozART, .x)))
+    
+  db$df_type_id_lookup
+  db$df_form %>% glimpse()
+  db$df_patient %>% glimpse()
+  
+  db$df_form %>% 
+    left_join(db$df_patient, by = "patient_uid")
+  
   
   # Couldn't figure out how to purrr the list df into the dm_from_data_frames function
   # paste output from chunk below into the dm_... function
   str_c("db$", names(db)) %>% cat(., sep = ", ")
+  
+  #str_c("db$", names(db)) %>% cat(., sep = ", ") %>% 
+  dm_from_data_frames(!!!db)
     
   dm_f <- dm_from_data_frames(db$df_clinical_consultation, db$df_dsd, db$df_form, db$df_identifier, 
                               db$df_key_vul_pop, db$df_laboratory, db$df_location, db$df_medication,
@@ -46,7 +59,8 @@
                               db$df_patient, db$df_type_id_lookup)
   
   # Setup a graphic depiction so we can plot and export
-  graph <- dm_create_graph(dm_f,  , col_attr = c("column", "type"))
+  graph <- dm_create_graph(dm_f, col_attr = c("column", "type"))
+  
   dm_render_graph(graph)
   
   # Export to a PDF for pushing around in AI

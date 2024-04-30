@@ -8,120 +8,6 @@ check_host <- function(host) {
   pingr::is_online(host)
 }
 
-#' @title Set a key
-#'
-#' @param service Name of the service
-#' @param name    Name of the key
-#'
-set_key <- function(service, name) {
-  
-  msg <- glue::glue("Please enter value for {service}/{name} key:")
-  
-  value <- rstudioapi::askForPassword(prompt = msg)
-  value <- stringr::str_trim(value, side = "both")
-  
-  if (base::nchar(value) == 0)
-    base::stop("ERROR - Invalid value entered")
-  
-  keyring::key_set_with_value(service = service,
-                              username = name,
-                              password = value)
-}
-
-
-#' @title Get key value
-#'
-#' @param service Name of the service
-#' @param name    Name of the key
-#'
-get_key <- function(service, name) {
-  keyring::key_get(service, name)
-}
-
-
-#' @title Check Service
-#'
-#'
-check_service <- function(service) {
-  keys <- keyring::key_list()
-  service %in% keys$service
-}
-
-#' @title Check Service
-#'
-#'
-check_key <- function(service, name) {
-  keys <- keyring::key_list()
-  name %in% keys[keys$service == service,]$username
-}
-
-#' @title Get Services
-#'
-#'
-get_services <- function() {
-  keys <- keyring::key_list()
-  unique(keys$service)
-}
-
-#' @title Get Service Keys
-#'
-#' @param service Account Service name
-#'
-get_keys <- function(service) {
-  keys <- keyring::key_list()
-  keys[keys$service == service,]$username
-}
-
-#' @title Get Service
-#'
-#' @param name Service name of the account
-#'
-get_account <- function(name) {
-  package_check('keyring')
-  
-  if(!glamr::is_stored(name)) {
-    
-    if(!interactive())
-      ui_stop("No {name} record found. Create a new account using {ui_code('set_key()')}")
-  }
-  
-  accnt <- keyring::key_list(name)
-  
-  accnt %>%
-    pull(username) %>%
-    map(function(username) {
-      get_key(service = name, name = username)
-    }) %>%
-    set_names(accnt$username) %>%
-    invisible()
-}
-
-#' @title Get Service
-#'
-#' @param name    Service name of the account
-#' @param keys    List of account key names
-#' @param update  Should an existing account be overwriten
-#'
-set_account <- function(name,
-                        keys = c("username", "password"),
-                        update = FALSE) {
-  
-  package_check('keyring')
-  
-  # Keyring Service
-  srv <- name
-  
-  if(glamr::is_stored(srv) & !update) {
-    usethis::ui_stop("{srv} exists already. Set update to TRUE to overwrite")
-  }
-  
-  # Prompt user to set value for account keys
-  keys %>%
-    walk(function(key){
-      set_key(service = srv, name = key)
-    })
-}
-
 
 #' @title Postgres Environment
 #'
@@ -231,6 +117,22 @@ db_connection <- function(db_driver = RPostgres::Postgres(),
   }
   
   return(conn)
+}
+
+#' @title Connect to MySQL DB
+#' 
+mysql_connection <- function(db_name, db_user, db_pass,
+                          db_host = "localhost",
+                          db_port = 3306) {
+  ## Connections
+  DBI::dbConnect(
+    drv = RMySQL::MySQL(),
+    host = db_host,
+    port = as.integer(db_port),
+    dbname = db_name,
+    username = db_user,
+    password = db_pass
+  )
 }
 
 
@@ -677,522 +579,67 @@ host_is_online <- function(base_url){
   pingr::is_online(base_url)
 }
 
-#' @title Clean Datim Modalities
-#'
-datim_clean_modalities <- function(dim_mods) {
-  
-  dim_mods %>%
-    mutate(
-      fiscal_year = str_extract(item, "(?<=[:space:]FY).*"),
-      fiscal_year = paste0("FY", fiscal_year),
-      sitetype = str_extract(item, ".*(?=[:space:]-)"),
-      name = str_extract(item, ".*(?=[:space:]FY)"),
-      short_name = str_extract(name, "(?<=-[:space:]).*"),
-      short_name = case_when(
-        short_name == "PMTCT ANC1 Only" ~ "PMTCT ANC",
-        short_name == "PMTCT Post ANC1" ~ "Post ANC1",
-        short_name == "Other Services" ~ "Other",
-        short_name == "Home Based" ~ "Home",
-        short_name %in% c("Other PITC", "TB Clinic") ~ str_replace(short_name, " ", ""),
-        TRUE ~ short_name
-      ),
-      short_name = case_when(
-        sitetype == "Community" ~ paste0(short_name, "Com"),
-        TRUE ~ short_name
+
+#' @title Get longest row from a dataframe variable
+#' 
+#' 
+get_chr_max <- function(.df, var) {
+  .df[[var]] %>% nchar(keepNA = F) %>% max(na.rm = T)
+}
+
+
+#' @title Get Data Structure for MySQL Import
+#' 
+#' 
+get_structure <- function(.df) {
+  .df %>% 
+    purrr::map(class) %>% 
+    tibble::as_tibble() %>% 
+    tidyr::pivot_longer(
+      cols = everything(),
+      names_to = "var",
+      values_to = "type") %>% 
+    dplyr::rowwise() %>% 
+    dplyr::mutate(
+      len = dplyr::case_when(
+        #type == "character" ~ .df[[!!var]] %>% nchar() %>% max(na.rm = TRUE),
+        type == "character" ~ get_chr_max(.df = .df, var = var),
+        type == "logical" ~ 1,
+        TRUE ~ NA
       )
-    )
+    ) %>% 
+    dplyr::ungroup()
 }
 
-
-#' @title Datim Resources
-#'
-datim_resources <- function(...,
-                            res_name = NULL,
-                            dataset = FALSE,
-                            username = NULL,
-                            password = NULL,
-                            base_url = NULL) {
-  # datim credentials
-  if (missing(username))
-    username <- datim_user()
-  
-  if (missing(password))
-    password <- datim_pwd()
-  
-  # Base url
-  if (missing(base_url))
-    base_url <- "https://final.datim.org"
-  
-  if(!host_is_online(base_url))
-    base::stop(base::paste0("The resource seems to be offline: ", base_url))
-  
-  # URL Query Options
-  options <- "?format=json&paging=false"
-  
-  # List of columns
-  cols <- list(...)
-  
-  print(paste0(cols))
-  
-  # API URL
-  api_url <- base_url %>%
-    paste0("/api/resources", options)
-  
-  # Query data
-  data <- api_url %>%
-    datim_execute_query(username, password, flatten = TRUE) %>%
-    purrr::pluck("resources") %>%
-    tibble::as_tibble()
-  
-  data <- data %>% rename(name = displayName)
-  
-  # Filter if needed
-  if (!base::is.null(res_name)) {
-    data <- data %>%
-      filter(name == res_name)
-  }
-  
-  # Return only the url when results is just 1 row
-  if(base::nrow(data) == 1 && dataset == FALSE) {
-    return(data$href)
-    
-  } else if (base::nrow(data) == 1 && dataset == TRUE) {
-    
-    dta_url <- data$href
-    print(dta_url)
-    
-    end_point <- dta_url %>%
-      str_split("\\/") %>%
-      unlist() %>%
-      last()
-    
-    dta_url <- dta_url %>% paste0(options)
-    
-    print(length(cols))
-    
-    if (length(cols) > 0) {
-      dta_url <- dta_url %>%
-        paste0("&fields=", paste0(cols, collapse = ","))
-    } else {
-      dta_url <- dta_url %>%
-        paste0("&fields=:nameable")
-    }
-    
-    print(dta_url)
-    
-    data <- dta_url %>%
-      datim_execute_query(username, password, flatten = TRUE) %>%
-      purrr::pluck(end_point) %>%
-      tibble::as_tibble()
-  }
-  
-  return(data)
+#' @title List columns & data types from all tables in names list
+#' 
+glimpse_all <- function(.df_list){
+  names(.df_list) %>% 
+    walk(function(.x) {
+      cat(glue("\n\n{which(names(db) == .x)} - {.x}\n\n\n"))
+      glimpse(db[[.x]])
+      #print(glimpse(db[[.x]]))
+    })
 }
 
-#' @title DATIM Data Elements
-#'
-#'
-datim_dataements <- function() {
-  datim_resources(res_name = "Data Elements", dataset = T) %>%
-    select(uid = id, code, dataelement = name, shortname = shortName, description) %>%
-    filter(str_detect(dataelement, "\\(|\\)", negate = F)) %>%
-    mutate(
-      dataelement_type = case_when(
-        str_detect(dataelement, ".*\\)[:space:]TARGET") ~ "Targets",
-        TRUE ~ "Results"
-      ),
-      indicator = str_extract(dataelement, ".*(?=[:space:]\\()"),
-      disaggs = extract_text(dataelement, "()")
-    ) %>%
-    separate(col = disaggs,
-             into = c("numeratordenom", "indicatortype", "disaggregate"),
-             sep = ", ",
-             remove = T) %>%
-    relocate(description, .after = last_col())
-}
-
-
-#' @title Get Datim Data Elements SQLView
-#' @note: TODO: Replace datasetuid with datasetname
-#'
-datim_deview <- function(datasetuid, base_url = NULL) {
+#' @title Add Foreign Key to table
+#' 
+#' 
+add_foreign_keys <- function(conn, tbl_src, tbl_dst, col_src, col_dst) {
   
-  df_deview <- datim_sqlviews(
-    view_name = "Data sets, elements and combos paramaterized",
-    dataset = TRUE,
-    vquery = list("dataSets" = datasetuid),
-    base_url = base_url)
+  fk_sql <- paste0("ALTER TABLE ", 
+                   tbl_src, 
+                   " ADD CONSTRAINT ",
+                   paste0("fk_", tbl_src),
+                   " FOREIGN KEY (", 
+                   paste(col_src, collapse = ", "), 
+                   ") REFERENCES ", 
+                   tbl_dst,
+                   " (",
+                   paste(col_dst, collapse = ", "),
+                   ") ON DELETE CASCADE ON UPDATE RESTRICT;")
   
-  df_deview %>%
-    separate(dataset,
-             into = c("source", "category"),
-             sep = ": ",
-             remove = F) %>%
-    mutate(
-      type = case_when(
-        str_detect(source, " Targets$|.*Target.*") ~ "Targets",
-        TRUE ~ "Results")) %>%
-    select(dataset, source, category, type,
-           dataelementuid, code, dataelement, shortname, dataelementdesc,
-           categoryoptioncombouid, categoryoptioncombocode, categoryoptioncombo,
-           everything())
-}
-
-#' @title Data Elements
-#'
-datim_data_elementsss <- function(username = NULL,
-                                  password = NULL,
-                                  base_url = NULL) {
+  print(fk_sql)
   
-  # datim credentials
-  if (missing(username))
-    username <- datim_user()
-  
-  if (missing(password))
-    password <- datim_pwd()
-  
-  # Base url
-  if (missing(base_url))
-    base_url <- "https://final.datim.org"
-  
-  # API URL
-  api_url <- base_url %>%
-    paste0("/api/dataElements?format=json&paging=false&fields=:nameable")#:identifiable
-  
-  data <- api_url %>%
-    datim_execute_query(username, password, flatten = TRUE) %>%
-    purrr::pluck("dataElements") %>%
-    tibble::as_tibble()
-  
-  print(data)
-}
-
-
-#' @title Datim SQLViews
-#'
-datim_sqlviews <- function(username,
-                           password,
-                           view_name = NULL,
-                           dataset = FALSE,
-                           datauid = NULL,
-                           query = NULL,
-                           base_url = NULL) {
-  
-  # Datim credentials
-  accnt <- lazy_secrets("datim", username, password)
-  
-  # Base url
-  if (missing(base_url))
-    base_url <- "https://final.datim.org"
-  
-  # Other Options
-  end_point <- "/api/sqlViews/"
-  
-  options <- "?format=json&paging=false"
-  
-  # API URL
-  api_url <- base_url %>% paste0(end_point, options)
-  
-  # Query data
-  data <- tryCatch(
-    {
-      api_url %>%
-        grabr::datim_execute_query(
-          username = accnt$username,
-          password = accnt$password,
-          flatten = TRUE
-        )
-    },
-    error = function(err) {
-      message(err)
-      usethis::ui_stop("ERROR - Unable to excute datim query")
-    },
-    warning = function(warn) {
-      message(warn)
-    }
-  )
-  
-  # Extract SQLview
-  data <- data %>%
-    purrr::pluck("sqlViews") %>%
-    tibble::as_tibble() %>%
-    dplyr::rename(uid = id, name = displayName)
-  
-  # Filter if needed
-  if (!base::is.null(view_name)) {
-    
-    print(glue::glue("Searching for SQL View: {view_name} ..."))
-    
-    data <- data %>%
-      dplyr::filter(stringr::str_to_lower(name) == str_to_lower(view_name))
-  }
-  
-  # Number of rows
-  rows = base::nrow(data)
-  
-  # Return only ID when results is just 1 row
-  if(rows == 0) {
-    base::warning("No match found for the requested SQL View")
-    return(NULL)
-  }
-  # Flag non-unique sqlview names
-  else if (rows > 1 && dataset == TRUE) {
-    base::warning("There are more than 1 match for the requested SQL View data. Please try to be specific.")
-    print(data)
-    return(NULL)
-  }
-  # Return only ID when results is just 1 row
-  else if (rows == 1 && dataset == FALSE) {
-    return(data$uid)
-  }
-  # Return SQLVIEW data
-  else if(base::nrow(data) == 1 && dataset == TRUE) {
-    
-    dta_uid <- data$uid
-    
-    dta_url <- base_url %>%
-      paste0(end_point, dta_uid, "/data", options, "&fields=*") #:identifiable, :nameable
-    
-    # apply variable query if needed
-    if (!is.null(query)) {
-      q <- names(query$params) %>%
-        map_chr(~paste0(.x, "=", query$params[.x])) %>%
-        paste0(collapse = "&") %>%
-        paste0("QUERY PARAMS: type=", query$type, "&", .)
-      
-      print(print(glue::glue("SQL View Params: {q}")))
-      
-      if (query$type == "variable") {
-        vq <- names(query$params) %>%
-          map_chr(~paste0(.x, ":", query$params[.x])) %>%
-          paste0(collapse = "&") %>%
-          paste0("&var=", .)
-        
-        print(glue::glue("SQL View variable query: {vq}"))
-        
-        dta_url <- dta_url %>% paste0(vq)
-        
-      } else if (query$type == "field") {
-        fq <- names(query$params) %>%
-          map_chr(~paste0("filter=", .x, ":eq:", query$params[.x])) %>%
-          paste0(collapse = "&") %>%
-          paste0("&", .)
-        
-        print(glue::glue("SQL View field query: {fq}"))
-        
-        dta_url <- dta_url %>% paste0(fq)
-      }
-      else {
-        print(glue::glue("Error - Invalid query type: {query$type}"))
-      }
-    }
-    
-    print(glue::glue("SQL View url: {dta_url}"))
-    
-    # Query data
-    data <- dta_url %>%
-      grabr::datim_execute_query(username, password, flatten = TRUE)
-    
-    # Detect Errors
-    if (!is.null(data$status)) {
-      print(glue::glue("Status: {data$status}"))
-      
-      if(!is.null(data$message)) {
-        print(glue::glue("Message: {data$message}"))
-      }
-      
-      return(NULL)
-    }
-    
-    # Headers
-    headers <- data %>%
-      purrr::pluck("listGrid") %>%
-      purrr::pluck("headers") %>%
-      dplyr::pull(column)
-    
-    # Data
-    data <- data %>%
-      purrr::pluck("listGrid") %>%
-      purrr::pluck("rows") %>%
-      tibble::as_tibble(.name_repair = "unique") %>%
-      janitor::clean_names() %>%
-      magrittr::set_colnames(headers)
-  }
-  
-  return(data)
-}
-
-#' @title Datim Period Information SQLView
-#
-#
-datim_peview <- function(username, password,
-                         base_url = NULL) {
-  
-  df_peview <- datim_sqlviews(
-    username = username,
-    password = password,
-    view_name = "Period information",
-    dataset = TRUE,
-    base_url = base_url)
-  
-  df_peview %>%
-    mutate(
-      period = case_when(
-        periodtype == "Daily" ~ paste0("FY", str_sub(iso, 3,4), "M", str_sub(iso, 5,6), "D", str_sub(iso, 7, 8)),
-        str_detect(periodtype, "Weekly") ~ paste0("FY", str_sub(iso, 3,4), str_sub(iso, 5)),
-        periodtype == "Monthly" ~ paste0("FY", str_sub(iso, 3,4), "M", str_sub(iso, 5)),
-        TRUE ~ paste0("FY", str_sub(iso, 3,4), str_sub(iso, 5))
-      )
-    ) %>%
-    rename(
-      period_id = periodid,
-      period_iso = iso,
-      period_type = periodtype
-    ) %>%
-    select(starts_with("period"), everything())
-}
-
-#' @title Datim Mechanism SQLView
-#'
-#'
-datim_mechview <- function(username, password,
-                           query = NULL,
-                           base_url = NULL) {
-  
-  # Extract OU Mechs
-  df_mechview <- datim_sqlviews(
-    username = username,
-    password = password,
-    view_name = "Mechanisms partners agencies OUS Start End",
-    dataset = TRUE,
-    query = query,
-    base_url = base_url)
-  
-  # Reshape Results - mech code, award number, and name separations chars
-  sep_chrs <- c("[[:space:]]+",
-                "[[:space:]]+-",
-                "[[:space:]]+-[[:space:]]+",
-                "[[:space:]]+-[[:space:]]+-",
-                "[[:space:]]+-[[:space:]]+-[[:space:]]+",
-                "[[:space:]]+-[[:space:]]+-[[:space:]]+-",
-                "-[[:space:]]+",
-                "-[[:space:]]+-",
-                "-[[:space:]]+-[[:space:]]+",
-                "-[[:space:]]+-[[:space:]]+-",
-                "-[[:space:]]+-[[:space:]]+-[[:space:]]+",
-                "-[[:space:]]+-[[:space:]]+-[[:space:]]+-")
-  
-  # Reshape Results - separation
-  df_mechview %>%
-    rename(
-      mech_code = code,
-      operatingunit = ou,
-      prime_partner = partner,
-      prime_partner_id = primeid,
-      funding_agency = agency,
-      operatingunit = ou
-    ) %>%
-    # mutate(
-    #   mech_name = str_remove(mechanism, mech_code),
-    #   award_number = str_extract(mech_name, "(?<=-[:space:]).*(?=[:space:]-)"),
-    #   mech_name = str_trim(mech_name),
-    #   mech_name = str_remove(mech_name, "-[:space:].*[:space:]-[:space:]|-[:space:]")
-    # ) %>%
-    mutate(
-      mech_name = str_remove(mechanism, mech_code),
-      mech_name = str_replace_all(mech_name, "\n", ""),
-      award_number = case_when(
-        str_detect(prime_partner, "^TBD") ~ NA_character_,
-        TRUE ~ str_extract(mech_name, "(?<=-[:space:])[A-Z0-9]+(?=[:space:]-[:space:])")
-      ),
-      mech_name = case_when(
-        !is.na(award_number) ~ str_remove(mech_name, award_number),
-        TRUE ~ mech_name
-      ),
-      mech_name = str_remove(mech_name, paste0("^", rev(sep_chrs), collapse = "|"))
-    ) %>%
-    select(uid, mech_code, mech_name, award_number, mechanism, everything())
-}
-
-
-#' @title Datim OU/Partners SQLView
-#'
-#'
-datim_ppview <- function(username, password,
-                         query = NULL,
-                         base_url = NULL) {
-  
-  df_ppview <- datim_sqlviews(
-    username = username,
-    password = password,
-    view_name = "Country, Partner, Agencies",
-    dataset = TRUE,
-    query = query,
-    base_url = base_url)
-  
-  df_ppview %>%
-    rename(
-      operatingunit = ou,
-      prime_partner = partner,
-      funding_agencies = agencies
-    )
-}
-
-#' @title Datim OU / Countries view
-#'
-#'
-datim_cntryview <- function(username, password,
-                            query = NULL,
-                            base_url = NULL) {
-  datim_sqlviews(
-    username = username,
-    password = password,
-    view_name = "OU countries",
-    dataset = TRUE,
-    query = query,
-    base_url = base_url)
-}
-
-
-#' @title Datim OU / Countries view
-#'
-#'
-datim_orgview <- function(username, password,
-                          query = NULL,
-                          cntry_uid = NULL,
-                          base_url) {
-  
-  df_cntries <- datim_cntryview(
-    username = username,
-    password = password,
-    base_url = base_url
-  )
-  
-  if (is.null(cntry_uid)) {
-    df_orgview <- df_cntries %>%
-      pmap_dfr(~datim_sqlviews(
-        username = username,
-        password = password,
-        view_name = "Data Exchange: Organisation Units",
-        dataset = TRUE,
-        query = list("OU" = ..3),
-        base_url = base_url
-      ))
-    
-    return(df_orgview)
-  }
-  
-  if (!cntry_uid %in% df_cntries$orgunit_uid)
-    usethis::ui_stop("ERROR - Invalid country uid")
-  
-  cntry_code <- df_cntries %>%
-    filter(orgunit_uid == cntry_uid) %>%
-    pull(orgunit_code)
-  
-  datim_sqlviews(
-    view_name = "Data Exchange: Organisation Units",
-    dataset = TRUE,
-    vquery = list("OU" = cntry_code),
-    base_url = base_url
-  )
+  DBI::dbSendQuery(conn, fk_sql)
 }

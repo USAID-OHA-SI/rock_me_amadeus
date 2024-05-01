@@ -19,6 +19,7 @@
 *.twbx
 *.pptx
 *.gz
+*.yml
 
 #nothing from these folders
 AI/*
@@ -27,19 +28,5 @@ Images/*
 Graphics/*
 Data/*
 Dataout/*
-#no data
-*.csv
-*.txt
-*.rds
-*.xlsx
-*.xls
-*.zip
-*.png
-*.twbx
-*.pptx
+Documents/*
 
-#nothing from these folders
-AI/*
-GIS/*
-Images/*
-Graphics/*

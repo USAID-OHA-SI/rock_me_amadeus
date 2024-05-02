@@ -621,12 +621,12 @@ get_structure <- function(.df, pks = NULL, tblname = NULL) {
         definition = dplyr::case_when(
           type == "integer" & unlist(pks[pks$table == tblname, "pk_col"]$pk_col) == var ~ "int not null auto_increment primary key",
           type == "integer" & unlist(pks[pks$table == tblname, "pk_col"]$pk_col) != var ~ "int",
-          type == "logical" ~ "char(1)",
+          type == "logical" ~ "tinyint(1)",
           type == "character" & str_detect(var, "_uuid$") ~ glue("char(38) not null"),
           type == "character" & len <= 255 ~ glue("varchar({len}) null"),
           type == "character" & len > 255 ~ "text null",
-          str_detect(type, "POSIX") ~ "datetime",
-          str_detect(type, "Date") ~ "date",
+          str_detect(type, "POSIX") ~ "datetime null",
+          str_detect(type, "Date") ~ "date null",
           TRUE ~ "text null"
         )
       )

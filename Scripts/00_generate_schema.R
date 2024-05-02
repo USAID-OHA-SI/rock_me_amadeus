@@ -247,6 +247,7 @@ an independent module used when a patient is registered for a service and is con
     dm_add_uk(location, 'location_uuid') %>% 
     # Forms
     dm_add_pk(form, 'id') %>% 
+    dm_add_uk(form, 'encounter_uuid') %>% 
     dm_add_fk(form, 'form_id', type_id_lookup, 'id_type_lookup') %>% 
     dm_add_fk(form, 'encounter_id', type_id_lookup, 'id_type_lookup') %>% 
     dm_add_fk(form, 'encounter_type', type_id_lookup, 'id_type_lookup') %>% 
@@ -294,26 +295,32 @@ an independent module used when a patient is registered for a service and is con
     dm_add_fk(medication, 'adherence_id', type_id_lookup, 'id_type_lookup') %>% 
     # Identification
     dm_add_pk(identifier, 'identifier_seq') %>% 
+    dm_add_uk(identifier, 'identifier_uuid') %>% 
+    dm_add_uk(identifier, 'patient_uuid') %>% 
     dm_add_fk(identifier, 'identifier_type', type_id_lookup, 'id_type_lookup') %>% 
     # Patients
     dm_add_pk(patient, 'id') %>% 
     dm_add_uk(patient, 'patient_uuid') %>% 
     dm_add_fk(patient, 'patient_uuid', identifier, 'patient_uuid') %>% 
-    dm_add_fk(patient, 'patient_uuid', pat_state, 'patient_uuid') %>% 
     dm_add_fk(patient, 'gender', type_id_lookup, 'id_type_lookup') %>% 
     dm_add_fk(patient, 'birthdate_estimated', type_id_lookup, 'id_type_lookup') %>% 
     # Patient Status
     dm_add_pk(pat_state, 'id') %>% 
     dm_add_uk(pat_state, 'state_uuid') %>% 
+    dm_add_fk(pat_state, 'patient_uuid', patient, 'patient_uuid') %>% 
     dm_add_fk(pat_state, 'location_uuid', location, 'location_uuid') %>% 
     dm_add_fk(pat_state, 'program_id', type_id_lookup, 'id_type_lookup') %>% 
     dm_add_fk(pat_state, 'source_id', type_id_lookup, 'id_type_lookup') %>% 
     dm_add_fk(pat_state, 'state_id', type_id_lookup, 'id_type_lookup') 
   
+  db$clinical_consultation %>% 
+    count(id, encounter_uuid) %>% 
+    filter(n > 1)
+  
   # Check constraints
-  dm_mozart %>% dm_get_all_pks()
-  dm_mozart %>% dm_get_all_uks()
-  dm_mozart %>% dm_get_all_fks()
+  # dm_mozart %>% dm_get_all_pks()
+  # dm_mozart %>% dm_get_all_uks()
+  # dm_mozart %>% dm_get_all_fks()
   
   #dm_mozart %>% dm_examine_constraints() %>% as_tibble()
   
@@ -324,7 +331,7 @@ an independent module used when a patient is registered for a service and is con
   dm_mozart <- dm_mozart %>% 
     dm_set_colors(
       darkgreen = c(dsd, clinical_consultation, key_vul_pop, 
-              laboratory, medication, observation),
+                    pat_state, laboratory, medication, observation),
       lightgreen = c(observation_lookup, clinical_consultation), 
       blue = form,
       darkgray = c(type_id_lookup, location)
@@ -339,17 +346,22 @@ an independent module used when a patient is registered for a service and is con
   dm_graph
   
   # Flatten - use join to flatten related tables
-  dm_mozart %>% dm_flatten_to_tbl(.start = dsd, form)
-  dm_mozart %>% dm_flatten_to_tbl(.start = clinical_consultation, form)
+  #dm_mozart %>% dm_flatten_to_tbl(.start = dsd, form, .recursive = T)
+  #dm_mozart %>% dm_flatten_to_tbl(.start = observation, clinical_consultation)
   
   # DB Schema
   
   DBI::dbListTables(conn)
   
-  # DB Build tables
+  # DB - Physical implementation ----
+  
+  # Extract all constraints from DM
   
   pks <- dm_mozart %>% dm_get_all_pks() 
+  uks <- dm_mozart %>% dm_get_all_uks() 
   fks <- dm_mozart %>% dm_get_all_fks()
+  
+  # DB - Build / Rebuild physical tables 
   
   names(db) %>% 
     walk(function(.x) {
@@ -385,25 +397,92 @@ an independent module used when a patient is registered for a service and is con
       DBI::dbWriteTable(
         conn = conn,
         name = .x,
-        fields = tbl_fields,
         value = db[[.x]],
+        field.types = tbl_fields,
         row.names = F,
         overwrite = T
       )
     })
   
-  # Apply all foreign keys to physical database
+  # Apply all unique key constraints to physical database
+  
+  uks %>%
+    filter(str_detect(kind, "ex.*UK$")) %>%
+    distinct(table) %>% 
+    pull(table) %>%
+    walk(function(.tbl){
+      
+      uks %>% 
+        filter(table == .tbl, str_detect(kind, "ex.*UK$")) %>% 
+        pwalk(function(table, uk_col, ...) {
+
+          .uq_sql <- glue(
+            "ALTER TABLE {table} ADD UNIQUE ({paste(uk_col, collapse=', ')});"
+          )
+          
+          print(glue("{table}: {.uq_sql}"))
+          
+          tryCatch(
+            {
+              DBI::dbExecute(conn = conn, statement = .uq_sql)
+            },
+            warning = function(warn) {print(warn)},
+            error = function(err) {print(err)},
+            finally = function() {print("Done")}
+          )
+          
+        })
+    })
+  
+  # Apply all foreign keys constraints to physical database
   
   fks %>% glimpse()
   
-  # fks %>% 
-  #   distinct(child_table) %>% 
-  #   pull() %>% 
-  #   walk(function(.x){
-  #     print(.x)
-  #   })
+  fks %>%
+    distinct(child_table) %>%
+    pull() %>%
+    #first() %>% 
+    walk(function(.ctbl){
+      
+      fks %>% 
+        filter(child_table == .ctbl) %>% 
+        select(-child_table) %>% 
+        pwalk(possibly(function(child_fk_cols, parent_table, parent_key_cols, ...) {
+          
+          .fq_drop <- glue("
+            IF EXISTS(
+              select * from information_schema.key_column_usage
+              where table_schema = '{dbname}' 
+              and table_name = '{.ctbl}' 
+              and constraint_name = 'fk_{.ctbl}_{child_fk_cols}';
+            )
+            THEN
+              ALTER TABLE {.ctbl} DROP FOREIGN KEY fk_{.ctbl}_{child_fk_cols}
+            END IF;
+          ")
+          
+          .fq_sql <- glue(
+            "ALTER TABLE {.ctbl} 
+            ADD CONSTRAINT fk_{.ctbl}_{child_fk_cols}
+            FOREIGN KEY ({child_fk_cols}) REFERENCES {parent_table}({parent_key_cols});
+          ")
+          
+          print(glue("{.ctbl}: {.fq_sql}"))
+          
+          tryCatch(
+            expr = {
+              #DBI::dbExecute(conn = conn, statement = .fq_drop)
+              DBI::dbExecute(conn = conn, statement = .fq_sql)
+            },
+            warning = function(warn) {message(warn)},
+            error = function(err) {message(err)},
+            finally = print(glue("Done with fk_{.ctbl}_{child_fk_cols}"))
+          )
+          
+        }), NULL)
+    })
   
-  # Generate SQL Statements and load data
+  # Generate SQL Statements and load data - NO WORKING For SOME REASON
   # dm_mozart %>% dm_ddl_pre(dest = conn)
   # dm_mozart %>% dm_ddl_load(dest = conn)
   # dm_mozart %>% dm_ddl_post(dest = conn)
@@ -411,13 +490,25 @@ an independent module used when a patient is registered for a service and is con
   # or this
   #dm_mozart %>% dm_sql(dest = conn)
   
-  conn %>% dplyr::tbl('form')
-  
 
 # MUNGE ============================================================================
   
   # Explore the names and common elements across data sets
     map(db, ~names(.x))
+  
+  # Take a pick at all tables
+  db %>% glimpse_all()
+  
+  # Query data from one of the tables
+  conn %>% 
+    tbl('form') %>% 
+    left_join(tbl(conn, 'type_id_lookup'), by = c('form_id' = 'id_type_lookup')) %>% 
+    filter(table_name == 'FORM', column_name == 'FORM_ID') %>% 
+    rename(form_name = id_type_desc) %>% 
+    count(patient_uuid, form_name, created_date) %>% 
+    filter(n>0) %>% 
+    arrange(desc(n), created_date) %>% 
+    collect()
   
 # VIZ ============================================================================
 

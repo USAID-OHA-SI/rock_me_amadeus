@@ -122,8 +122,8 @@ db_connection <- function(db_driver = RPostgres::Postgres(),
 #' @title Connect to MySQL DB
 #' 
 mysql_connection <- function(db_name, db_user, db_pass,
-                          db_host = "localhost",
-                          db_port = 3306) {
+                             db_host = "localhost",
+                             db_port = 3306) {
   ## Connections
   DBI::dbConnect(
     drv = RMySQL::MySQL(),

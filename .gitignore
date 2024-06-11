@@ -46,3 +46,6 @@ Data/*
 Dataout/*
 Documents/*
 
+# Keep sql files within the scripts folder
+!Scripts/*.sql
+

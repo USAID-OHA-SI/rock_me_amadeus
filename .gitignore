@@ -9,16 +9,33 @@
 .Ruserdata
 
 #no data
+
 *.csv
+*.gz
 *.txt
 *.rds
 *.xlsx
 *.xls
+*.json
 *.zip
 *.png
-*.twbx
 *.pptx
+*.tfl
+*.twb
+*.twbx
+*.tbs
+*.tbm
+*.hyper
+*.sql
+*.parquet
+*.svg
+*.dfx
+*.json
+*.dta
+*.shp
+*.dbf
 *.gz
+*.yml
 
 #nothing from these folders
 AI/*
@@ -27,3 +44,8 @@ Images/*
 Graphics/*
 Data/*
 Dataout/*
+Documents/*
+
+# Keep sql files within the scripts folder
+!Scripts/*.sql
+

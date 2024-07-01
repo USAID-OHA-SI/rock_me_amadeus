@@ -8,7 +8,7 @@ select distinct table_name, column_name
 from type_id_lookup
 order by table_name;
 
-select distinct table_name, column_name
+select distinct table_name, column_name, id_type_desc
 from type_id_lookup
 where table_name = 'MEDICATION';
 
@@ -138,7 +138,6 @@ select * from med_dispensations
 where row_num = 1;
 */
 
-
 SELECT 
 	p.patient_uuid,
     f.location_uuid,
@@ -242,7 +241,7 @@ on f.form_id = ifid.id_type_lookup
 left join (select id_type_lookup, id_type_desc from type_id_lookup where table_name = 'FORM' and column_name = 'ENCOUNTER_TYPE') ietype
 on f.encounter_type = ietype.id_type_lookup;
 
-select * from clinical_consultation_vw;
+select * from clinical_consultation_vw limit 100;
 
 --- Option #2: Leverage the form view --- 
 
